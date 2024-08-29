@@ -131,11 +131,16 @@ class ReaderThread(threading.Thread):
     def __init__(self, window: wx.Frame) -> None:
         threading.Thread.__init__(self)
         self.window = window
+        self.running = True
         self.start()
 
     def run(self):
         readings = read()
-        wx.PostEvent(self.window, GotDataEvent(readings))
+        if self.running:
+            wx.PostEvent(self.window, GotDataEvent(readings))
+
+    def abort(self):
+        self.running = False
 
 
 class ViewerFrame(wx.Frame):
@@ -208,6 +213,7 @@ class ViewerFrame(wx.Frame):
                     self.__plots[f][name] = line
                 ax.set_xlabel('Time')
                 ax.set_ylabel(f)
+                ax.grid(True)
                 ax.legend()
             else:
                 # Update values of existing data
@@ -280,6 +286,8 @@ class ViewerFrame(wx.Frame):
 
     def onClose(self, event):
         self.worker.abort()
+        self.readingWorker.abort()
+        self.Destroy()
 
 
 def main() -> None:
