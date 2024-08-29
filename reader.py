@@ -15,7 +15,7 @@ from matplotlib.backends.backend_wxagg import FigureCanvasWxAgg as FigureCanvas
 import matplotlib.pyplot as plt
 
 latestData = {}
-EVT_GOT_DATA = wx.NewId()
+EVT_GOT_DATA = wx.NewIdRef()
 
 def getIp() -> str:
     """Get local IP of current machine.
