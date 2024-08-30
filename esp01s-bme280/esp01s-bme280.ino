@@ -40,7 +40,7 @@ void setup() {
   Serial.printf("Name: %s\n", DEVICE_NAME);
 
   // Initialize sensor
-  Wire.begin(2, 0);
+  Wire.begin(0, 2);
   if (bme.begin(0x76, &Wire)) {
     sensorUp = true;
     Serial.println("Found BME280 sensor.");
