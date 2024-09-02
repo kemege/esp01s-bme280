@@ -14,7 +14,7 @@ matplotlib.use('Agg')
 from matplotlib.backends.backend_wxagg import FigureCanvasWxAgg as FigureCanvas
 import matplotlib.pyplot as plt
 
-latestData = {}
+latestData: Dict[str, Dict[str, Any]] = {}
 EVT_GOT_DATA = wx.NewIdRef()
 
 def getIp() -> str:
@@ -68,21 +68,31 @@ class ViewerRequestHandler(http.server.BaseHTTPRequestHandler):
     """Handler for HTTP requests from LabVIEW"""
     def __init__(self, request, client_address, server) -> None:
         self.routes = [
-            ('GET', '/latest', self.getLatestRecords),
-            ('GET', '/test', self.getTestData)
+            ('GET', '/latest', self.getLatestRecords, 'text/xml'),
+            ('GET', '/test', self.getTestData, 'text/xml'),
+            ('GET', '/metrics', self.getPrometheusMetrics, 'text/plain'),
+            ('GET', '/version', self.getPrometheusVersion, 'application/json'),
+            ('GET', '/health', self.getPrometheusHealth, 'application/json')
         ]
         super().__init__(request, client_address, server)
 
     def do_GET(self):
-        for method, endpoint, func in self.routes:
+        for method, endpoint, func, contentType in self.routes:
             if method == 'GET' and self.path.startswith(endpoint):
                 data = func()
                 self.send_response(200)
-                self.send_header('Content-Type', 'text/xml')
+                self.send_header('Content-Type', contentType)
                 self.end_headers()
-                self.wfile.write(self.dict2xml(data).encode())
+                if type(data) != str:
+                    if 'xml' in contentType:
+                        self.wfile.write(self.dict2xml(data).encode())
+                    elif 'json' in contentType:
+                        self.wfile.write(json.dumps(data).encode())
+                else:
+                    self.wfile.write(data.encode())
                 return
         self.send_response(404, 'Not Found')
+        self.end_headers()
         
     def getLatestRecords(self):
         keys = list(latestData.keys())
@@ -102,6 +112,49 @@ class ViewerRequestHandler(http.server.BaseHTTPRequestHandler):
             result += '/>'
         result += '</root>'
         return result
+    
+    def getPrometheusHealth(self):
+        """Endpoint for health indication for Prometheus.
+
+        Returns:
+            dict: health information, always "ok".
+        """        
+        return {'health': 'ok'}
+    
+    def getPrometheusVersion(self):
+        """Endpoint for version information for Prometheus.
+
+        Returns:
+            dict: version information.
+        """     
+        return {'version': "0.1-20240901",
+                "platform": sys.platform,
+                "pythonVersion": sys.version}
+    
+    def getPrometheusMetrics(self):
+        """Endpoint for metric scraping for Prometheus.
+
+        Returns:
+            str: Text data for metric values and description.
+        """     
+        result = ('# HELP temperature Temperature in Celsius\n'
+                  '# TYPE temperature gauge\n'
+                  '# HELP humidity Humidity in RH%\n'
+                  '# TYPE humidity gauge\n'
+                  '# HELP pressure Pressure in Pa\n'
+                  '# TYPE pressure gauge\n'
+                  '# HELP altitude Estimated altitude in Meter\n'
+                  '# TYPE altitude gauge\n'
+                  '# HELP num_sensor Number of available sensors\n'
+                  '# TYPE num_sensor gauge\n')
+        for device, data in latestData.items():
+            for key, value in data.items():
+                if key in ['device', 'time']:
+                    continue
+                result += f'{key}{{device="{device}"}} {value}\n'
+        result += f'num_sensor {len(latestData)}'
+        return result
+        
 
 
 class ServerThread(threading.Thread):
