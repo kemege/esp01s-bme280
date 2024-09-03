@@ -9,6 +9,7 @@ import threading
 from typing import Dict, List, Tuple, Any
 import json
 import sys
+import logging
 import matplotlib
 matplotlib.use('Agg')
 from matplotlib.backends.backend_wxagg import FigureCanvasWxAgg as FigureCanvas
@@ -62,6 +63,34 @@ def read() -> List[Dict[str, float]]:
     else:
         data = json.loads(rawData.decode())
         return [data]
+
+
+class StreamToLoggerAndUi(object):
+    """Redirect stream outputs to logger and GUI"""
+
+    def __init__(self, logger: logging.Logger, textCtrl: wx.TextCtrl,
+                 logLevel=logging.INFO):
+        self.logger = logger
+        self.logLevel = logLevel
+        self.textCtrl = textCtrl
+        self.lineBuffer = ''
+
+    def write(self, buf):
+        for line in buf.rstrip().splitlines():
+            self.logger.log(self.logLevel, line.rstrip())
+            if self.textCtrl is not None and bool(self.textCtrl):
+                data = {
+                    'asctime': datetime.datetime.now().isoformat(),
+                    'message': line.rstrip()
+                    }
+                msg = '%(asctime)s %(message)s\n' % data
+                self.textCtrl.AppendText(msg)
+    
+    def setTextCtrl(self, textCtrl: wx.TextCtrl):
+        if textCtrl is None:
+            self.textCtrl = None
+        else:
+            self.textCtrl = textCtrl
 
 
 class ViewerRequestHandler(http.server.BaseHTTPRequestHandler):
@@ -156,7 +185,6 @@ class ViewerRequestHandler(http.server.BaseHTTPRequestHandler):
         return result
         
 
-
 class ServerThread(threading.Thread):
     """Thread for running web server in background"""
     def __init__(self):
@@ -212,22 +240,42 @@ class ViewerFrame(wx.Frame):
         self.data: Dict[str, Dict[str, Tuple[List[datetime.datetime], List[float]]]] = {f: {} for f in self.__fields}
         self.__plots = {f: {} for f in self.__fields}
         
-        panel = wx.Panel(self)
+        nb = wx.Notebook(self)
+        # Tab for data figure
+        panel1 = wx.Panel(nb)
         self.figure = plt.figure()
         self.figure.suptitle('Lab Environment Recording')
         self.axes = [self.figure.add_subplot(len(self.__fields), 1, i + 1) 
                      for i in range(len(self.__fields))]
         self.figure.tight_layout()
-        self.figurePanel = FigureCanvas(panel, -1, self.figure)
+        self.figurePanel = FigureCanvas(panel1, -1, self.figure)
 
         grid = wx.GridBagSizer(1, 3)
         grid.Add(self.figurePanel, (0, 0), (1, 1), flag=wx.EXPAND | wx.ALL)
 
         grid.AddGrowableCol(0, 1)
         grid.AddGrowableRow(0, 1)
-        panel.SetSizer(grid)
-        self.SetClientSize(panel.GetBestSize())
+        panel1.SetSizer(grid)
 
+        # Tab for logging
+        panel2 = wx.Panel(nb)
+        sizer = wx.BoxSizer(wx.VERTICAL)
+        self.loggerText = wx.TextCtrl(panel2, style=wx.TE_READONLY | wx.TE_MULTILINE)
+        sizer.Add(self.loggerText, flag=wx.EXPAND | wx.ALL, proportion=1)
+        panel2.SetSizer(sizer)
+
+        nb.AddPage(panel1, 'Data Display')
+        nb.AddPage(panel2, 'Logging')
+
+        # Configure logger
+        if isinstance(sys.stdout, StreamToLoggerAndUi):
+            sys.stdout.setTextCtrl(self.loggerText)
+        if isinstance(sys.stderr, StreamToLoggerAndUi):
+            sys.stderr.setTextCtrl(self.loggerText)
+
+        self.SetClientSize(panel1.GetBestSize())
+
+        # Set timed jobs
         self.timer = wx.Timer(self, 1)
         self.Bind(wx.EVT_TIMER, self.timedLoop)
         self.timer.Start(3000)
@@ -345,7 +393,23 @@ class ViewerFrame(wx.Frame):
 
 def main() -> None:
     """Main entrance of program.
-    """    
+    """
+    # Configure loggers
+    today = datetime.date.today().isoformat()
+    basePath = os.path.abspath('.')
+    logPath = os.path.join(basePath, 'logs', f'operation-{today}.log')
+    logging.basicConfig(
+        format='%(asctime)s [%(levelname)s] [%(name)s] %(message)s',
+        filename=logPath,
+        level=logging.DEBUG,
+        filemode='a'
+        )
+    # Redirect stream outputs
+    stdoutLogger = logging.getLogger('STDOUT')
+    sys.stdout = StreamToLoggerAndUi(stdoutLogger, None, logging.INFO)
+    stderrLogger = logging.getLogger('STDERR')
+    sys.stderr = StreamToLoggerAndUi(stderrLogger, None, logging.ERROR)
+    # Create window and app
     app = wx.App()
     frame = ViewerFrame()
     app.SetTopWindow(frame)
